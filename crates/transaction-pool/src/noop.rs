@@ -14,8 +14,10 @@ use crate::{
     AllPoolTransactions, AllTransactionsEvents, BestTransactions, BlockInfo, EthPoolTransaction,
     EthPooledTransaction, NewTransactionEvent, PoolResult, PoolSize, PoolTransaction,
     PooledTransactionsElement, PropagatedTransactions, TransactionEvents, TransactionOrigin,
-    TransactionPool, TransactionValidationOutcome, TransactionValidator, ValidPoolTransaction,
+    TransactionPool, TransactionPoolBundleExt, TransactionValidationOutcome, TransactionValidator,
+    ValidPoolTransaction,
 };
+use parking_lot::RwLock;
 use reth_eth_wire_types::HandleMempoolData;
 use reth_primitives::{Address, BlobTransactionSidecar, TxHash, U256};
 use std::{collections::HashSet, marker::PhantomData, sync::Arc};
@@ -241,6 +243,19 @@ impl TransactionPool for NoopTransactionPool {
             return Ok(vec![])
         }
         Err(BlobStoreError::MissingSidecar(tx_hashes[0]))
+    }
+}
+
+impl TransactionPoolBundleExt for NoopTransactionPool {
+    type Bundle = ();
+
+    fn add_bundle(&self, _bundle: ()) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn get_bundles(&self) -> parking_lot::RwLockReadGuard<'_, Vec<()>> {
+        static EMPTY_VEC: RwLock<Vec<()>> = RwLock::new(Vec::new());
+        EMPTY_VEC.read()
     }
 }
 

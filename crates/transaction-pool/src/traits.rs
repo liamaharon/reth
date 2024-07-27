@@ -8,6 +8,7 @@ use crate::{
     AllTransactionsEvents,
 };
 use futures_util::{ready, Stream};
+use parking_lot::RwLockReadGuard;
 use reth_eth_wire_types::HandleMempoolData;
 use reth_primitives::{
     kzg::KzgSettings, transaction::TryFromRecoveredTransactionError, AccessList, Address,
@@ -1285,4 +1286,17 @@ impl<Tx: PoolTransaction> Stream for NewSubpoolTransactionStream<Tx> {
             }
         }
     }
+}
+
+/// Extension for [TransactionPool] trait that enables a secondary bundle pool
+#[auto_impl::auto_impl(&, Arc)]
+pub trait TransactionPoolBundleExt: TransactionPool {
+    /// The bundle type of the pool
+    type Bundle: std::fmt::Debug;
+
+    /// Add a bundle to the pool, returning an Error if invalid.
+    fn add_bundle(&self, bundle: Self::Bundle) -> Result<(), String>;
+
+    /// Get all the bundles from the pool
+    fn get_bundles(&self) -> RwLockReadGuard<'_, Vec<Self::Bundle>>;
 }
