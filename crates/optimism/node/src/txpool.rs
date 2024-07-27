@@ -6,9 +6,9 @@ use reth_primitives::{Block, GotExpected, InvalidTransactionError, SealedBlock};
 use reth_provider::{BlockReaderIdExt, StateProviderFactory};
 use reth_revm::L1BlockInfo;
 use reth_transaction_pool::{
-    CoinbaseTipOrdering, EthPoolTransaction, EthPooledTransaction, EthTransactionValidator, Pool,
-    TransactionOrigin, TransactionValidationOutcome, TransactionValidationTaskExecutor,
-    TransactionValidator,
+    mev_share_pool::MevSharePool, CoinbaseTipOrdering, EthPoolTransaction, EthPooledTransaction,
+    EthTransactionValidator, TransactionOrigin, TransactionValidationOutcome,
+    TransactionValidationTaskExecutor, TransactionValidator,
 };
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -16,7 +16,7 @@ use std::sync::{
 };
 
 /// Type alias for default optimism transaction pool
-pub type OpTransactionPool<Client, S> = Pool<
+pub type OpTransactionPool<Client, S> = MevSharePool<
     TransactionValidationTaskExecutor<OpTransactionValidator<Client, EthPooledTransaction>>,
     CoinbaseTipOrdering<EthPooledTransaction>,
     S,

@@ -22,8 +22,8 @@ use reth_payload_builder::{PayloadBuilderHandle, PayloadBuilderService};
 use reth_provider::CanonStateSubscriptions;
 use reth_tracing::tracing::{debug, info};
 use reth_transaction_pool::{
-    blobstore::DiskFileBlobStore, CoinbaseTipOrdering, TransactionPool,
-    TransactionValidationTaskExecutor,
+    blobstore::DiskFileBlobStore, mev_share_pool::MevSharePool, CoinbaseTipOrdering,
+    TransactionPool, TransactionPoolBundleExt, TransactionValidationTaskExecutor,
 };
 use std::sync::Arc;
 
@@ -146,7 +146,7 @@ where
             )
             .map(OpTransactionValidator::new);
 
-        let transaction_pool = reth_transaction_pool::Pool::new(
+        let transaction_pool = MevSharePool::new(
             validator,
             CoinbaseTipOrdering::default(),
             blob_store,
@@ -218,7 +218,7 @@ impl<EVM> OptimismPayloadBuilder<EVM> {
 impl<Node, EVM, Pool> PayloadServiceBuilder<Node, Pool> for OptimismPayloadBuilder<EVM>
 where
     Node: FullNodeTypes<Engine = OptimismEngineTypes>,
-    Pool: TransactionPool + Unpin + 'static,
+    Pool: TransactionPoolBundleExt + Unpin + 'static,
     EVM: ConfigureEvm,
 {
     async fn spawn_payload_service(

@@ -15,6 +15,8 @@ compile_error!("Cannot build the `op-reth` binary with the `optimism` feature fl
 
 #[cfg(feature = "optimism")]
 fn main() {
+    use reth::rpc::api::MevApiServer;
+    use reth_rpc::mev::MevApi;
     reth::sigsegv_handler::install();
 
     // Enable backtraces unless a RUST_BACKTRACE value has already been explicitly provided.
@@ -32,6 +34,10 @@ fn main() {
                         sequencer_http,
                     )));
                 }
+
+                // register mev rpc
+                let ext = MevApi::new(ctx.registry.pool().clone());
+                ctx.modules.merge_configured(ext.into_rpc())?;
 
                 Ok(())
             })

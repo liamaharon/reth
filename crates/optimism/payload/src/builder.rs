@@ -16,7 +16,7 @@ use reth_primitives::{
 };
 use reth_provider::StateProviderFactory;
 use reth_revm::database::StateProviderDatabase;
-use reth_transaction_pool::{BestTransactionsAttributes, TransactionPool};
+use reth_transaction_pool::{BestTransactionsAttributes, TransactionPoolBundleExt};
 use revm::{
     db::states::bundle_state::BundleRetention,
     primitives::{EVMError, EnvWithHandlerCfg, InvalidTransaction, ResultAndState},
@@ -61,7 +61,7 @@ impl<EvmConfig> OptimismPayloadBuilder<EvmConfig> {
 impl<Pool, Client, EvmConfig> PayloadBuilder<Pool, Client> for OptimismPayloadBuilder<EvmConfig>
 where
     Client: StateProviderFactory,
-    Pool: TransactionPool,
+    Pool: TransactionPoolBundleExt,
     EvmConfig: ConfigureEvm,
 {
     type Attributes = OptimismPayloadBuilderAttributes;
@@ -234,9 +234,12 @@ pub(crate) fn optimism_payload_builder<EvmConfig, Pool, Client>(
 where
     EvmConfig: ConfigureEvm,
     Client: StateProviderFactory,
-    Pool: TransactionPool,
+    Pool: TransactionPoolBundleExt,
 {
     let BuildArguments { client, pool, mut cached_reads, config, cancel, best_payload } = args;
+
+    let bundles = &pool.get_bundles();
+    dbg!(bundles);
 
     let state_provider = client.state_by_block_hash(config.parent_block.hash())?;
     let state = StateProviderDatabase::new(state_provider);
