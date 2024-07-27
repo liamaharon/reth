@@ -88,7 +88,7 @@ impl SBundlePool {
             return Err("Pending pool is full!".to_owned());
         }
 
-        match self.validate_sbundle(&bundle) {
+        match self.validate_bundle(&bundle) {
             Ok(_) => {}
             Err(e) => return Err(format!("Bundle validation failed: {}", e)),
         }
@@ -104,7 +104,7 @@ impl SBundlePool {
     }
 
     /// Validate a bundle is eligible for inclusion
-    pub(crate) fn validate_sbundle(&self, _bundle: &SendBundleRequest) -> Result<(), String> {
+    pub(crate) fn validate_bundle(&self, _bundle: &SendBundleRequest) -> Result<(), String> {
         // TODO: Implement validation
         Ok(())
     }

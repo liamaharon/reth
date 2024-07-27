@@ -20,6 +20,7 @@ use reth_node_builder::{
 use reth_optimism_consensus::OptimismBeaconConsensus;
 use reth_payload_builder::{PayloadBuilderHandle, PayloadBuilderService};
 use reth_provider::CanonStateSubscriptions;
+use reth_rpc_types::mev::SendBundleRequest;
 use reth_tracing::tracing::{debug, info};
 use reth_transaction_pool::{
     blobstore::DiskFileBlobStore, mev_share_pool::MevSharePool, CoinbaseTipOrdering,
@@ -218,7 +219,7 @@ impl<EVM> OptimismPayloadBuilder<EVM> {
 impl<Node, EVM, Pool> PayloadServiceBuilder<Node, Pool> for OptimismPayloadBuilder<EVM>
 where
     Node: FullNodeTypes<Engine = OptimismEngineTypes>,
-    Pool: TransactionPoolBundleExt + Unpin + 'static,
+    Pool: TransactionPoolBundleExt<Bundle = SendBundleRequest> + Unpin + 'static,
     EVM: ConfigureEvm,
 {
     async fn spawn_payload_service(

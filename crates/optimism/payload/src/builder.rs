@@ -12,10 +12,14 @@ use reth_payload_builder::error::PayloadBuilderError;
 use reth_primitives::{
     constants::{BEACON_NONCE, EMPTY_RECEIPTS, EMPTY_TRANSACTIONS},
     eip4844::calculate_excess_blob_gas,
-    proofs, Block, Header, IntoRecoveredTransaction, Receipt, TxType, EMPTY_OMMER_ROOT_HASH, U256,
+    proofs,
+    revm_primitives::ExecutionResult,
+    Block, Header, IntoRecoveredTransaction, Receipt, TxType, EMPTY_OMMER_ROOT_HASH, U256,
 };
 use reth_provider::StateProviderFactory;
 use reth_revm::database::StateProviderDatabase;
+use reth_rpc_eth_types::utils::recover_raw_transaction;
+use reth_rpc_types::mev::{BundleItem, SendBundleRequest};
 use reth_transaction_pool::{BestTransactionsAttributes, TransactionPoolBundleExt};
 use revm::{
     db::states::bundle_state::BundleRetention,
@@ -61,7 +65,7 @@ impl<EvmConfig> OptimismPayloadBuilder<EvmConfig> {
 impl<Pool, Client, EvmConfig> PayloadBuilder<Pool, Client> for OptimismPayloadBuilder<EvmConfig>
 where
     Client: StateProviderFactory,
-    Pool: TransactionPoolBundleExt,
+    Pool: TransactionPoolBundleExt<Bundle = SendBundleRequest>,
     EvmConfig: ConfigureEvm,
 {
     type Attributes = OptimismPayloadBuilderAttributes;
@@ -234,12 +238,9 @@ pub(crate) fn optimism_payload_builder<EvmConfig, Pool, Client>(
 where
     EvmConfig: ConfigureEvm,
     Client: StateProviderFactory,
-    Pool: TransactionPoolBundleExt,
+    Pool: TransactionPoolBundleExt<Bundle = SendBundleRequest>,
 {
     let BuildArguments { client, pool, mut cached_reads, config, cancel, best_payload } = args;
-
-    let bundles = &pool.get_bundles();
-    dbg!(bundles);
 
     let state_provider = client.state_by_block_hash(config.parent_block.hash())?;
     let state = StateProviderDatabase::new(state_provider);
@@ -406,6 +407,113 @@ where
 
         // append transaction to the list of executed transactions
         executed_txs.push(sequencer_tx.into_signed());
+    }
+
+    // Naively attempt to process all bundles returned by the pool
+    let bundles: &Vec<SendBundleRequest> = &pool.get_bundles();
+    'outer: for bundle in bundles {
+        // Staged state changes for this bundle. These are committed all together only once the
+        // bundle is determined to be valid.
+        let mut bundle_staged_changes = Vec::with_capacity(bundle.bundle_body.len());
+
+        // Ensure the bundle doesn't go overweight
+        let mut bundle_cumulative_gas_used = cumulative_gas_used;
+
+        for bundle_item in bundle.bundle_body.clone() {
+            let (tx, can_revert) = match bundle_item {
+                BundleItem::Tx { tx, can_revert } => {
+                    // Convert the bytes into a SignedTransaction
+                    match recover_raw_transaction(tx) {
+                        Ok(tx) => (tx, can_revert),
+                        Err(_) => {
+                            // Bundle contains an invalid transaction, skip it
+
+                            // In reality this should never happen as the tx correctness should
+                            // have been pre-validated by the pool.
+                            continue 'outer
+                        }
+                    }
+                }
+                BundleItem::Hash { .. } => {
+                    panic!("BundleItem::Hash is not supported in this worktest.")
+                }
+            };
+
+            // Convert tx to a signed transaction
+            let tx = tx.into_ecrecovered_transaction();
+            let env = EnvWithHandlerCfg::new_with_cfg_env(
+                initialized_cfg.clone(),
+                initialized_block_env.clone(),
+                evm_config.tx_env(&tx),
+            );
+
+            // Configure the environment for the block.
+            let mut evm = evm_config.evm_with_env(&mut db, env);
+
+            // Execute the transaction. If the bundle is invalid due to how this transaction
+            // executed, returns an error.
+            let transact_result = match evm.transact() {
+                Ok(ResultAndState { result, state }) => match result {
+                    ExecutionResult::Success { .. } => Ok((result, state)),
+                    ExecutionResult::Revert { .. } => {
+                        if can_revert {
+                            Ok((result, state))
+                        } else {
+                            Err("Transaction reverted when not allowed.")
+                        }
+                    }
+                    ExecutionResult::Halt { .. } => Err("Transaction halted."),
+                },
+                Err(_) => Err("Transaction execution failed."),
+            };
+
+            match transact_result {
+                Ok((result, state)) => {
+                    bundle_cumulative_gas_used += result.gas_used();
+                    if bundle_cumulative_gas_used > block_gas_limit {
+                        // Bundle is overweight, skip it
+                        continue 'outer
+                    }
+
+                    // Bundle is valid so far, stage the changes from this transaction.
+                    bundle_staged_changes.push((result, state, tx, bundle_cumulative_gas_used));
+                }
+                Err(e) => {
+                    // Bundle was found to be invalid, skip it
+                    dbg!("Bundle Invalid: {}", bundle);
+                    dbg!(e);
+                    continue 'outer
+                }
+            }
+        }
+
+        // If we've reached this point, the bundle is valid and we can commit the changes
+        cumulative_gas_used += bundle_cumulative_gas_used;
+        for (result, state, tx, tx_cumulative_gas_used) in bundle_staged_changes {
+            db.commit(state);
+            let gas_used = result.gas_used();
+
+            // Push transaction changeset and calculate header bloom filter for receipt.
+            receipts.push(Some(Receipt {
+                tx_type: tx.tx_type(),
+                success: result.is_success(),
+                cumulative_gas_used: tx_cumulative_gas_used,
+                logs: result.into_logs().into_iter().map(Into::into).collect(),
+                deposit_nonce: None,
+                deposit_receipt_version: None,
+            }));
+
+            // update add to total fees
+            let miner_fee = tx
+                .effective_tip_per_gas(Some(base_fee))
+                .expect("fee is always valid; execution succeeded");
+            total_fees += U256::from(miner_fee) * U256::from(gas_used);
+
+            // append transaction to the list of executed transactions
+            executed_txs.push(tx.into_signed());
+
+            dbg!("Executed bundle: {}", bundle);
+        }
     }
 
     if !attributes.no_tx_pool {
