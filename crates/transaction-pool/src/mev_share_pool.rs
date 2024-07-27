@@ -30,7 +30,7 @@ where
     T: TransactionOrdering<Transaction = <V as TransactionValidator>::Transaction>,
     S: BlobStore,
 {
-    /// Create a new transaction pool instance.
+    /// Create a new [`MevSharePool`]
     pub fn new(validator: V, ordering: T, blob_store: S, config: PoolConfig) -> Self {
         Self {
             tx_pool: Arc::new(Pool::<V, T, S>::new(validator, ordering, blob_store, config)),
