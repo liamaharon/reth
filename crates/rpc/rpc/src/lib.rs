@@ -36,6 +36,7 @@ mod admin;
 mod debug;
 mod engine;
 pub mod eth;
+pub mod mev;
 mod net;
 mod otterscan;
 mod reth;
