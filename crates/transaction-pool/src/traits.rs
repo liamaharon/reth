@@ -1316,5 +1316,5 @@ pub trait TransactionPoolBundleExt: TransactionPool {
     fn get_bundles(&self) -> RwLockReadGuard<'_, Vec<Self::Bundle>>;
 
     /// Remove a bundle from the pool
-    fn remove_bundle(&self, hash: B256) -> Result<(), String>;
+    fn remove_bundle(&self, hash: &B256) -> Result<(), String>;
 }

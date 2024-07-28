@@ -254,7 +254,7 @@ impl TransactionPoolBundleExt for NoopTransactionPool {
         Ok(())
     }
 
-    fn remove_bundle(&self, _hash: B256) -> Result<(), String> {
+    fn remove_bundle(&self, _hash: &B256) -> Result<(), String> {
         Ok(())
     }
 

@@ -96,9 +96,9 @@ where
         self.pending.read()
     }
 
-    fn remove_bundle(&self, hash: B256) -> Result<(), String> {
+    fn remove_bundle(&self, hash: &B256) -> Result<(), String> {
         let len_before = self.pending.read().len();
-        self.pending.write().retain(|b| b.hash() != hash);
+        self.pending.write().retain(|b| b.hash() != *hash);
         let len_after = self.pending.read().len();
         if len_before > len_after {
             Ok(())
@@ -400,7 +400,7 @@ where
         self.sbundle_pool.get_bundles()
     }
 
-    fn remove_bundle(&self, hash: B256) -> Result<(), String> {
+    fn remove_bundle(&self, hash: &B256) -> Result<(), String> {
         self.sbundle_pool.remove_bundle(hash)
     }
 }
