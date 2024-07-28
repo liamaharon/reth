@@ -410,7 +410,11 @@ where
     }
 
     // Naively attempt to process all bundles returned by the pool
-    let bundles: &Vec<SendBundleRequest> = &pool.get_bundles();
+    let read_lock = pool.get_bundles();
+    let bundles: &Vec<SendBundleRequest> = &read_lock;
+    // Stage bundles for removal from the pool here. We can't do it while processing them because
+    // there is a read lock on the pool.
+    let mut bundles_to_remove = Vec::new();
     'outer: for bundle in bundles {
         // Staged state changes for this bundle. These are committed all together only once the
         // bundle is determined to be valid.
@@ -426,11 +430,10 @@ where
                     // Convert the bytes into a SignedTransaction
                     match recover_raw_transaction(tx) {
                         Ok(tx) => (tx, can_revert),
-                        Err(_) => {
+                        Err(e) => {
                             // Bundle contains an invalid transaction, skip it
-
-                            // In reality this should never happen as the tx correctness should
-                            // have been pre-validated by the pool.
+                            dbg!("Bundle Invalid, removing from pool", &bundle, e);
+                            bundles_to_remove.push(bundle.hash());
                             continue 'outer
                         }
                     }
@@ -472,7 +475,7 @@ where
                 Ok((result, state)) => {
                     staged_cumulative_gas_used += result.gas_used();
                     if staged_cumulative_gas_used > block_gas_limit {
-                        // Bundle is overweight, skip it
+                        // Bundle would push the block overweight. Skip it, but leave it in the pool
                         continue 'outer
                     }
 
@@ -483,9 +486,7 @@ where
                     // Bundle was found to be invalid, skip it
                     // TODO: Smarter approach to deciding when to remove the bundle from the pool
                     dbg!("Bundle Invalid, removing from pool", &bundle, e);
-                    if let Err(e) = pool.remove_bundle(bundle.hash()) {
-                        warn!(target: "payload_builder", %e, "failed to remove invalid bundle from pool");
-                    }
+                    bundles_to_remove.push(bundle.hash());
                     continue 'outer
                 }
             }
@@ -517,6 +518,15 @@ where
             executed_txs.push(tx.into_signed());
 
             dbg!("Executed bundle", bundle);
+        }
+    }
+
+    // Finally, we can release the read lock and remove any executed or invalid bundles from the
+    // pool.
+    drop(read_lock);
+    for hash in bundles_to_remove {
+        if let Err(e) = pool.remove_bundle(hash) {
+            warn!(target: "payload_builder", %e, "failed to remove invalid bundle from pool");
         }
     }
 
