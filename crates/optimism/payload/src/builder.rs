@@ -434,6 +434,7 @@ where
                             // Bundle contains an invalid transaction, skip it
                             dbg!("Bundle Invalid, removing from pool", &bundle, e);
                             bundles_to_remove.push(bundle.hash());
+                            // TODO: Rollback changes this bundle
                             continue 'outer
                         }
                     }
@@ -476,25 +477,30 @@ where
                     staged_cumulative_gas_used += result.gas_used();
                     if staged_cumulative_gas_used > block_gas_limit {
                         // Bundle would push the block overweight. Skip it, but leave it in the pool
+                        // TODO: Rollback changes this bundle
                         continue 'outer
                     }
 
                     // Bundle is valid so far, stage the changes from this transaction.
-                    bundle_staged_changes.push((result, state, tx));
+                    drop(evm);
+                    db.commit(state);
+                    bundle_staged_changes.push((result, tx));
                 }
                 Err(e) => {
                     // Bundle was found to be invalid, skip it
                     // TODO: Smarter approach to deciding when to remove the bundle from the pool
                     dbg!("Bundle Invalid, removing from pool", &bundle, e);
                     bundles_to_remove.push(bundle.hash());
+
+                    // TODO: Rollback changes this bundle
                     continue 'outer
                 }
             }
         }
 
-        // If we've reached this point, the bundle is valid and we can commit the changes
-        for (result, state, tx) in bundle_staged_changes {
-            db.commit(state);
+        // If we've reached this point, the bundle is valid and we can process the changes
+        // TODO: "Checkpoint" staged DB changes here.
+        for (result, tx) in bundle_staged_changes {
             let gas_used = result.gas_used();
             cumulative_gas_used += gas_used;
 
@@ -524,10 +530,21 @@ where
     // Finally, we can release the read lock and remove any executed or invalid bundles from the
     // pool.
     drop(read_lock);
-    for hash in bundles_to_remove {
+    for hash in &bundles_to_remove {
         if let Err(e) = pool.remove_bundle(hash) {
             warn!(target: "payload_builder", %e, "failed to remove invalid bundle from pool");
         }
+    }
+
+    // HACK: Workaround since I haven't been able to implement db rollbacks in the given timeframe,
+    // if any bundles were removed while building this payload, we cannot commit it and so abort
+    // with some misc error.
+    //
+    // TODO: In the future, state changes from partially executed invalid bundles should be rolled
+    // back when detected, so they don't interrupt building of the current payload. After that, this
+    // code block can be removed.
+    if bundles_to_remove.len() > 0 {
+        return Err(PayloadBuilderError::WithdrawalsBeforeShanghai)
     }
 
     if !attributes.no_tx_pool {
