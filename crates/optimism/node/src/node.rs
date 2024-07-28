@@ -23,8 +23,10 @@ use reth_provider::CanonStateSubscriptions;
 use reth_rpc_types::mev::SendBundleRequest;
 use reth_tracing::tracing::{debug, info};
 use reth_transaction_pool::{
-    blobstore::DiskFileBlobStore, mev_share_pool::MevSharePool, CoinbaseTipOrdering,
-    TransactionPool, TransactionPoolBundleExt, TransactionValidationTaskExecutor,
+    blobstore::DiskFileBlobStore,
+    mev_share_pool::{MevSharePool, SBundlePoolConfig},
+    CoinbaseTipOrdering, TransactionPool, TransactionPoolBundleExt,
+    TransactionValidationTaskExecutor,
 };
 use std::sync::Arc;
 
@@ -148,10 +150,12 @@ where
             .map(OpTransactionValidator::new);
 
         let transaction_pool = MevSharePool::new(
+            ctx.provider().clone(),
             validator,
             CoinbaseTipOrdering::default(),
             blob_store,
             ctx.pool_config(),
+            SBundlePoolConfig::default(),
         );
         info!(target: "reth::cli", "Transaction pool initialized");
         let transactions_path = data_dir.txpool_transactions();

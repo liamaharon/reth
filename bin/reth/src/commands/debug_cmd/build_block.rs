@@ -34,9 +34,10 @@ use reth_revm::{database::StateProviderDatabase, primitives::EnvKzgSettings};
 use reth_rpc_types::engine::{BlobsBundleV1, PayloadAttributes};
 use reth_stages::StageId;
 use reth_transaction_pool::{
-    blobstore::InMemoryBlobStore, mev_share_pool::MevSharePool, BlobStore, CoinbaseTipOrdering,
-    EthPooledTransaction, PoolConfig, TransactionOrigin, TransactionPool,
-    TransactionValidationTaskExecutor,
+    blobstore::InMemoryBlobStore,
+    mev_share_pool::{MevSharePool, SBundlePoolConfig},
+    BlobStore, CoinbaseTipOrdering, EthPooledTransaction, PoolConfig, TransactionOrigin,
+    TransactionPool, TransactionValidationTaskExecutor,
 };
 use std::{path::PathBuf, str::FromStr, sync::Arc};
 use tracing::*;
@@ -152,10 +153,12 @@ impl Command {
                 );
 
         let transaction_pool = MevSharePool::new(
+            blockchain_db.clone(),
             validator,
             CoinbaseTipOrdering::default(),
             blob_store.clone(),
             PoolConfig::default(),
+            SBundlePoolConfig::default(),
         );
         info!(target: "reth::cli", "Transaction pool initialized");
 

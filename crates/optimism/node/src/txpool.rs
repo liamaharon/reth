@@ -17,6 +17,7 @@ use std::sync::{
 
 /// Type alias for default optimism transaction pool
 pub type OpTransactionPool<Client, S> = MevSharePool<
+    Client,
     TransactionValidationTaskExecutor<OpTransactionValidator<Client, EthPooledTransaction>>,
     CoinbaseTipOrdering<EthPooledTransaction>,
     S,

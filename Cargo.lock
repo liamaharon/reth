@@ -8759,6 +8759,7 @@ dependencies = [
  "reth-primitives",
  "reth-provider",
  "reth-rpc-types",
+ "reth-storage-api",
  "reth-tasks",
  "reth-tracing",
  "revm",

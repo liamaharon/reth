@@ -11,47 +11,103 @@ use crate::{
 use parking_lot::{RwLock, RwLockReadGuard};
 use reth_eth_wire_types::HandleMempoolData;
 use reth_primitives::{Address, PooledTransactionsElement, TxHash, B256};
-use reth_rpc_types::{mev::SendBundleRequest, BlobTransactionSidecar};
+use reth_rpc_types::{mev::SendBundleRequest, BlobTransactionSidecar, BlockNumberOrTag};
+use reth_storage_api::BlockReaderIdExt;
 use std::{collections::HashSet, sync::Arc};
 use tokio::sync::mpsc::Receiver;
 
 /// [`TransactionPoolBundleExt`] implementation for the MEV Share bundle type.
 #[derive(Debug)]
-pub struct MevSharePool<V, T: TransactionOrdering, S> {
+pub struct MevSharePool<Client, V, T: TransactionOrdering, S> {
     /// Arc'ed instance of the tx pool internals
     tx_pool: Arc<Pool<V, T, S>>,
     /// Arc'ed instance of the sbundle pool internals
     sbundle_pool: Arc<SBundlePool>,
+    /// Client is used to validate txns
+    client: Arc<Client>,
 }
 
-impl<V, T, S> MevSharePool<V, T, S>
+impl<Client, V, T, S> MevSharePool<Client, V, T, S>
 where
     V: TransactionValidator,
     T: TransactionOrdering<Transaction = <V as TransactionValidator>::Transaction>,
     S: BlobStore,
+    Client: BlockReaderIdExt,
 {
     /// Create a new [`MevSharePool`]
-    pub fn new(validator: V, ordering: T, blob_store: S, config: PoolConfig) -> Self {
+    pub fn new(
+        client: Client,
+        validator: V,
+        ordering: T,
+        blob_store: S,
+        tx_pool_config: PoolConfig,
+        bundle_pool_config: SBundlePoolConfig,
+    ) -> Self {
         Self {
-            tx_pool: Arc::new(Pool::<V, T, S>::new(validator, ordering, blob_store, config)),
-            sbundle_pool: Arc::new(SBundlePool::new(SBundlePoolConfig::default())),
+            client: Arc::new(client),
+            tx_pool: Arc::new(Pool::<V, T, S>::new(
+                validator,
+                ordering,
+                blob_store,
+                tx_pool_config,
+            )),
+            sbundle_pool: Arc::new(SBundlePool::new(bundle_pool_config)),
         }
+    }
+
+    fn validate_bundle(&self, bundle: &SendBundleRequest) -> Result<(), String> {
+        if bundle.bundle_body.is_empty() {
+            return Err("Bundle body must not be empty".to_owned());
+        }
+
+        let cur_bundles_len = self.sbundle_pool.pending.read().len();
+        if cur_bundles_len as u32 >= self.sbundle_pool.config.max_bundles {
+            return Err("Bundle pool is full".to_owned());
+        }
+
+        // use latest block if parent is zero: genesis block
+        let cur_block = self
+            .client
+            .block_by_number_or_tag(BlockNumberOrTag::Latest)
+            .map_err(|e| format!("Failed to fetch latest block during validation: {}", e))?
+            .ok_or("Failed to fetch latest block during validation")?
+            .seal_slow()
+            .header
+            .number;
+
+        // Assuming .block is the min_block, not the exact block it needs to be included
+        if cur_block < bundle.inclusion.block {
+            return Err("current block < inclusion.block".to_owned());
+        }
+
+        // Filter on the Option to get the value out
+        if let Some(max_block) = bundle.inclusion.max_block {
+            if cur_block > max_block {
+                return Err("current block > inclusion.max_block".to_owned());
+            }
+        }
+
+        Ok(())
     }
 }
 
-impl<V, T, S> TransactionPoolBundleExt for MevSharePool<V, T, S>
+impl<Client, V, T, S> TransactionPoolBundleExt for MevSharePool<Client, V, T, S>
 where
     V: TransactionValidator,
     T: TransactionOrdering<Transaction = <V as TransactionValidator>::Transaction>,
     S: BlobStore,
+    Client: BlockReaderIdExt,
 {
     type Bundle = SendBundleRequest;
 
     fn add_bundle(&self, bundle: SendBundleRequest) -> Result<(), String> {
+        self.validate_bundle(&bundle)?;
         self.sbundle_pool.add_bundle(bundle)
     }
 
     fn get_bundles(&self) -> RwLockReadGuard<'_, Vec<SendBundleRequest>> {
+        // TODO: Re-validate bundles once per block, rather than every time they are requested
+        self.sbundle_pool.pending.write().retain(|b| self.validate_bundle(b).is_ok());
         self.sbundle_pool.get_bundles()
     }
 
@@ -123,19 +179,24 @@ impl SBundlePool {
 }
 
 /// [`TransactionPool`] requires implementors to be [`Clone`].
-impl<V, T: TransactionOrdering, S> Clone for MevSharePool<V, T, S> {
+impl<Client, V, T: TransactionOrdering, S> Clone for MevSharePool<Client, V, T, S> {
     fn clone(&self) -> Self {
-        Self { tx_pool: Arc::clone(&self.tx_pool), sbundle_pool: Arc::clone(&self.sbundle_pool) }
+        Self {
+            tx_pool: Arc::clone(&self.tx_pool),
+            sbundle_pool: Arc::clone(&self.sbundle_pool),
+            client: Arc::clone(&self.client),
+        }
     }
 }
 
 /// Implements the [`TransactionPool`] interface by delegating to the inner `tx_pool`.
 /// TODO: Use a crate like `delegate!` or `ambassador` to automate this.
-impl<V, T, S> TransactionPool for MevSharePool<V, T, S>
+impl<Client, V, T, S> TransactionPool for MevSharePool<Client, V, T, S>
 where
     V: TransactionValidator,
     T: TransactionOrdering<Transaction = <V as TransactionValidator>::Transaction>,
     S: BlobStore,
+    Client: BlockReaderIdExt,
 {
     type Transaction = T::Transaction;
 
@@ -330,11 +391,12 @@ where
 }
 
 /// TODO: Use something like `delegate!` to automate this.
-impl<V, T, S> TransactionPoolExt for MevSharePool<V, T, S>
+impl<Client, V, T, S> TransactionPoolExt for MevSharePool<Client, V, T, S>
 where
     V: TransactionValidator,
     T: TransactionOrdering<Transaction = <V as TransactionValidator>::Transaction>,
     S: BlobStore,
+    Client: BlockReaderIdExt,
 {
     fn set_block_info(&self, info: BlockInfo) {
         self.tx_pool.set_block_info(info)
