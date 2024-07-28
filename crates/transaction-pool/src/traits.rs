@@ -11,12 +11,14 @@ use futures_util::{ready, Stream};
 use parking_lot::RwLockReadGuard;
 use reth_eth_wire_types::HandleMempoolData;
 use reth_primitives::{
-    kzg::KzgSettings, transaction::TryFromRecoveredTransactionError, AccessList, Address,
-    BlobTransactionSidecar, BlobTransactionValidationError, FromRecoveredPooledTransaction,
-    IntoRecoveredTransaction, PooledTransactionsElement, PooledTransactionsElementEcRecovered,
-    SealedBlock, Transaction, TransactionSignedEcRecovered, TryFromRecoveredTransaction, TxHash,
-    TxKind, B256, EIP1559_TX_TYPE_ID, EIP4844_TX_TYPE_ID, U256,
+    keccak256, kzg::KzgSettings, transaction::TryFromRecoveredTransactionError, AccessList,
+    Address, BlobTransactionSidecar, BlobTransactionValidationError,
+    FromRecoveredPooledTransaction, IntoRecoveredTransaction, PooledTransactionsElement,
+    PooledTransactionsElementEcRecovered, SealedBlock, Transaction, TransactionSignedEcRecovered,
+    TryFromRecoveredTransaction, TxHash, TxKind, B256, EIP1559_TX_TYPE_ID, EIP4844_TX_TYPE_ID,
+    U256,
 };
+use reth_rpc_types::mev::SendBundleRequest;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::{
@@ -1288,15 +1290,31 @@ impl<Tx: PoolTransaction> Stream for NewSubpoolTransactionStream<Tx> {
     }
 }
 
+/// Trait for transaction types used inside the pool
+pub trait PoolBundle: fmt::Debug + Send + Sync {
+    /// Hash of the bundle.
+    fn hash(&self) -> B256;
+}
+
+impl PoolBundle for SendBundleRequest {
+    fn hash(&self) -> B256 {
+        let bytes = bincode::serialize(&self).unwrap();
+        keccak256(&bytes)
+    }
+}
+
 /// Extension for [TransactionPool] trait that enables a secondary bundle pool
 #[auto_impl::auto_impl(&, Arc)]
 pub trait TransactionPoolBundleExt: TransactionPool {
     /// The bundle type of the pool
-    type Bundle: std::fmt::Debug;
+    type Bundle: PoolBundle;
 
     /// Add a bundle to the pool, returning an Error if invalid.
     fn add_bundle(&self, bundle: Self::Bundle) -> Result<(), String>;
 
     /// Get all the bundles from the pool
     fn get_bundles(&self) -> RwLockReadGuard<'_, Vec<Self::Bundle>>;
+
+    /// Remove a bundle from the pool
+    fn remove_bundle(&self, hash: B256) -> Result<(), String>;
 }

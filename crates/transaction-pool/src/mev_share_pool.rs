@@ -1,16 +1,16 @@
 //! [`TransactionPoolBundleExt`] implementation for the MEV Share bundle type.
 
 use crate::{
-    AllPoolTransactions, AllTransactionsEvents, BestTransactions, BestTransactionsAttributes,
-    BlobStore, BlobStoreError, BlockInfo, CanonicalStateUpdate, ChangedAccount,
-    GetPooledTransactionLimit, NewBlobSidecar, NewTransactionEvent, Pool, PoolConfig, PoolResult,
-    PoolSize, PropagatedTransactions, TransactionEvents, TransactionListenerKind,
-    TransactionOrdering, TransactionOrigin, TransactionPool, TransactionPoolBundleExt,
-    TransactionPoolExt, TransactionValidator, ValidPoolTransaction,
+    traits::PoolBundle, AllPoolTransactions, AllTransactionsEvents, BestTransactions,
+    BestTransactionsAttributes, BlobStore, BlobStoreError, BlockInfo, CanonicalStateUpdate,
+    ChangedAccount, GetPooledTransactionLimit, NewBlobSidecar, NewTransactionEvent, Pool,
+    PoolConfig, PoolResult, PoolSize, PropagatedTransactions, TransactionEvents,
+    TransactionListenerKind, TransactionOrdering, TransactionOrigin, TransactionPool,
+    TransactionPoolBundleExt, TransactionPoolExt, TransactionValidator, ValidPoolTransaction,
 };
 use parking_lot::{RwLock, RwLockReadGuard};
 use reth_eth_wire_types::HandleMempoolData;
-use reth_primitives::{Address, PooledTransactionsElement, TxHash};
+use reth_primitives::{Address, PooledTransactionsElement, TxHash, B256};
 use reth_rpc_types::{mev::SendBundleRequest, BlobTransactionSidecar};
 use std::{collections::HashSet, sync::Arc};
 use tokio::sync::mpsc::Receiver;
@@ -50,8 +50,20 @@ where
     fn add_bundle(&self, bundle: SendBundleRequest) -> Result<(), String> {
         self.sbundle_pool.add_bundle(bundle)
     }
+
     fn get_bundles(&self) -> RwLockReadGuard<'_, Vec<SendBundleRequest>> {
         self.sbundle_pool.get_bundles()
+    }
+
+    fn remove_bundle(&self, hash: B256) -> Result<(), String> {
+        let len_before = self.sbundle_pool.pending.read().len();
+        self.sbundle_pool.pending.write().retain(|b| b.hash() != hash);
+        let len_after = self.sbundle_pool.pending.read().len();
+        if len_before > len_after {
+            Ok(())
+        } else {
+            Err("Bundle not found".to_owned())
+        }
     }
 }
 

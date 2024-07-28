@@ -19,7 +19,7 @@ use crate::{
 };
 use parking_lot::RwLock;
 use reth_eth_wire_types::HandleMempoolData;
-use reth_primitives::{Address, BlobTransactionSidecar, TxHash, U256};
+use reth_primitives::{Address, BlobTransactionSidecar, TxHash, B256, U256};
 use reth_rpc_types::mev::SendBundleRequest;
 use std::{collections::HashSet, marker::PhantomData, sync::Arc};
 use tokio::sync::{mpsc, mpsc::Receiver};
@@ -251,6 +251,10 @@ impl TransactionPoolBundleExt for NoopTransactionPool {
     type Bundle = SendBundleRequest;
 
     fn add_bundle(&self, _bundle: Self::Bundle) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn remove_bundle(&self, _hash: B256) -> Result<(), String> {
         Ok(())
     }
 

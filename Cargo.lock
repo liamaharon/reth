@@ -8740,6 +8740,7 @@ dependencies = [
  "aquamarine",
  "assert_matches",
  "auto_impl",
+ "bincode",
  "bitflags 2.6.0",
  "criterion",
  "futures-util",

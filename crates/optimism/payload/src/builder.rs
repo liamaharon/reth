@@ -20,7 +20,7 @@ use reth_provider::StateProviderFactory;
 use reth_revm::database::StateProviderDatabase;
 use reth_rpc_eth_types::utils::recover_raw_transaction;
 use reth_rpc_types::mev::{BundleItem, SendBundleRequest};
-use reth_transaction_pool::{BestTransactionsAttributes, TransactionPoolBundleExt};
+use reth_transaction_pool::{BestTransactionsAttributes, PoolBundle, TransactionPoolBundleExt};
 use revm::{
     db::states::bundle_state::BundleRetention,
     primitives::{EVMError, EnvWithHandlerCfg, InvalidTransaction, ResultAndState},
@@ -416,8 +416,9 @@ where
         // bundle is determined to be valid.
         let mut bundle_staged_changes = Vec::with_capacity(bundle.bundle_body.len());
 
-        // Ensure the bundle doesn't go overweight
-        let mut bundle_cumulative_gas_used = cumulative_gas_used;
+        // Track the cumulative gas used, but don't commit it until the bundle is sure to be
+        // included in the block
+        let mut staged_cumulative_gas_used = cumulative_gas_used;
 
         for bundle_item in bundle.bundle_body.clone() {
             let (tx, can_revert) = match bundle_item {
@@ -459,45 +460,48 @@ where
                         if can_revert {
                             Ok((result, state))
                         } else {
-                            Err("Transaction reverted when not allowed.")
+                            Err("Transaction reverted when not allowed.".to_owned())
                         }
                     }
-                    ExecutionResult::Halt { .. } => Err("Transaction halted."),
+                    ExecutionResult::Halt { .. } => Err("Transaction halted.".to_owned()),
                 },
-                Err(_) => Err("Transaction execution failed."),
+                Err(e) => Err(format!("Transaction execution failed: {}", e)),
             };
 
             match transact_result {
                 Ok((result, state)) => {
-                    bundle_cumulative_gas_used += result.gas_used();
-                    if bundle_cumulative_gas_used > block_gas_limit {
+                    staged_cumulative_gas_used += result.gas_used();
+                    if staged_cumulative_gas_used > block_gas_limit {
                         // Bundle is overweight, skip it
                         continue 'outer
                     }
 
                     // Bundle is valid so far, stage the changes from this transaction.
-                    bundle_staged_changes.push((result, state, tx, bundle_cumulative_gas_used));
+                    bundle_staged_changes.push((result, state, tx));
                 }
                 Err(e) => {
                     // Bundle was found to be invalid, skip it
-                    dbg!("Bundle Invalid: {}", bundle);
-                    dbg!(e);
+                    // TODO: Smarter approach to deciding when to remove the bundle from the pool
+                    dbg!("Bundle Invalid, removing from pool", &bundle, e);
+                    if let Err(e) = pool.remove_bundle(bundle.hash()) {
+                        warn!(target: "payload_builder", %e, "failed to remove invalid bundle from pool");
+                    }
                     continue 'outer
                 }
             }
         }
 
         // If we've reached this point, the bundle is valid and we can commit the changes
-        cumulative_gas_used += bundle_cumulative_gas_used;
-        for (result, state, tx, tx_cumulative_gas_used) in bundle_staged_changes {
+        for (result, state, tx) in bundle_staged_changes {
             db.commit(state);
             let gas_used = result.gas_used();
+            cumulative_gas_used += gas_used;
 
             // Push transaction changeset and calculate header bloom filter for receipt.
             receipts.push(Some(Receipt {
                 tx_type: tx.tx_type(),
                 success: result.is_success(),
-                cumulative_gas_used: tx_cumulative_gas_used,
+                cumulative_gas_used,
                 logs: result.into_logs().into_iter().map(Into::into).collect(),
                 deposit_nonce: None,
                 deposit_receipt_version: None,
@@ -512,7 +516,7 @@ where
             // append transaction to the list of executed transactions
             executed_txs.push(tx.into_signed());
 
-            dbg!("Executed bundle: {}", bundle);
+            dbg!("Executed bundle", bundle);
         }
     }
 
