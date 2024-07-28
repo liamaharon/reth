@@ -7953,6 +7953,7 @@ name = "reth-optimism-payload-builder"
 version = "1.0.1"
 dependencies = [
  "alloy-rlp",
+ "anyhow",
  "reth-basic-payload-builder",
  "reth-chainspec",
  "reth-evm",

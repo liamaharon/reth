@@ -58,7 +58,6 @@ where
         _request: SendBundleRequest,
         _sim_overrides: SimBundleOverrides,
     ) -> RpcResult<SimBundleResponse> {
-        // Out of scope for work task.
         todo!()
     }
 }
@@ -78,8 +77,6 @@ impl<Pool> Clone for MevApi<Pool> {
 /// [`Mev`] specific errors.
 #[derive(Debug)]
 pub enum MevError {
-    /// Thrown if the bundle body has no entries
-    EmptyBundleBody,
     /// Inserting the bundle into the pool failed
     InsertionError(String),
 }
@@ -87,10 +84,6 @@ pub enum MevError {
 impl From<MevError> for ErrorObjectOwned {
     fn from(err: MevError) -> Self {
         match err {
-            MevError::EmptyBundleBody => rpc_error_with_code(
-                jsonrpsee_types::error::INVALID_PARAMS_CODE,
-                "Bundle body must not be empty",
-            ),
             MevError::InsertionError(reason) => rpc_error_with_code(
                 jsonrpsee_types::error::INVALID_PARAMS_CODE,
                 format!("Failed to insert bundle into pool: {}", reason),

@@ -4,6 +4,7 @@ use crate::{
     error::OptimismPayloadBuilderError,
     payload::{OptimismBuiltPayload, OptimismPayloadBuilderAttributes},
 };
+use anyhow::anyhow;
 use reth_basic_payload_builder::*;
 use reth_chainspec::{EthereumHardforks, OptimismHardfork};
 use reth_evm::{system_calls::pre_block_beacon_root_contract_call, ConfigureEvm};
@@ -434,7 +435,6 @@ where
                             // Bundle contains an invalid transaction, skip it
                             dbg!("Bundle Invalid, removing from pool", &bundle, e);
                             bundles_to_remove.push(bundle.hash());
-                            // TODO: Rollback changes this bundle
                             continue 'outer
                         }
                     }
@@ -477,7 +477,6 @@ where
                     staged_cumulative_gas_used += result.gas_used();
                     if staged_cumulative_gas_used > block_gas_limit {
                         // Bundle would push the block overweight. Skip it, but leave it in the pool
-                        // TODO: Rollback changes this bundle
                         continue 'outer
                     }
 
@@ -491,15 +490,12 @@ where
                     // TODO: Smarter approach to deciding when to remove the bundle from the pool
                     dbg!("Bundle Invalid, removing from pool", &bundle, e);
                     bundles_to_remove.push(bundle.hash());
-
-                    // TODO: Rollback changes this bundle
                     continue 'outer
                 }
             }
         }
 
         // If we've reached this point, the bundle is valid and we can process the changes
-        // TODO: "Checkpoint" staged DB changes here.
         for (result, tx) in bundle_staged_changes {
             let gas_used = result.gas_used();
             cumulative_gas_used += gas_used;
@@ -536,15 +532,13 @@ where
         }
     }
 
-    // HACK: Workaround since I haven't been able to implement db rollbacks in the given timeframe,
-    // if any bundles were removed while building this payload, we cannot commit it and so abort
-    // with some misc error.
-    //
-    // TODO: In the future, state changes from partially executed invalid bundles should be rolled
-    // back when detected, so they don't interrupt building of the current payload. After that, this
-    // code block can be removed.
+    // TODO: In the future, if it is possible, state changes from partially executed invalid bundles
+    // should be rolled back when detected instead of throwing out the current payload. After
+    // that, this code block can be removed.
     if bundles_to_remove.len() > 0 {
-        return Err(PayloadBuilderError::WithdrawalsBeforeShanghai)
+        return Err(PayloadBuilderError::Other(
+            anyhow!("Invalid bundle in payload, try again.").into(),
+        ))
     }
 
     if !attributes.no_tx_pool {
