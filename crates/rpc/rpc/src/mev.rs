@@ -33,16 +33,12 @@ where
         &self,
         bundle: SendBundleRequest,
     ) -> Result<SendBundleResponse, MevError> {
-        if bundle.bundle_body.is_empty() {
-            return Err(MevError::EmptyBundleBody)?
-        }
-
         // TODO: Check if this is the correct way to serialize bundle contents
         let bytes = bincode::serialize(&bundle.bundle_body).unwrap();
         let bundle_hash = keccak256(bytes);
 
         // Validation is performed by the pool
-        self.pool.add_bundle(bundle).map_err(|reason| MevError::InsertionError(reason))?;
+        self.pool.add_bundle(bundle).map_err(MevError::InsertionError)?;
 
         Ok(SendBundleResponse { bundle_hash })
     }

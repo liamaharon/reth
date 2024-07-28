@@ -22,9 +22,7 @@ pub struct MevSharePool<Client, V, T: TransactionOrdering, S> {
     /// Arc'ed instance of the tx pool internals
     tx_pool: Arc<Pool<V, T, S>>,
     /// Arc'ed instance of the sbundle pool internals
-    sbundle_pool: Arc<SBundlePool>,
-    /// Client is used to validate txns
-    client: Arc<Client>,
+    sbundle_pool: Arc<SBundlePool<Client>>,
 }
 
 impl<Client, V, T, S> MevSharePool<Client, V, T, S>
@@ -44,86 +42,18 @@ where
         bundle_pool_config: SBundlePoolConfig,
     ) -> Self {
         Self {
-            client: Arc::new(client),
             tx_pool: Arc::new(Pool::<V, T, S>::new(
                 validator,
                 ordering,
                 blob_store,
                 tx_pool_config,
             )),
-            sbundle_pool: Arc::new(SBundlePool::new(bundle_pool_config)),
-        }
-    }
-
-    fn validate_bundle(&self, bundle: &SendBundleRequest) -> Result<(), String> {
-        if bundle.bundle_body.is_empty() {
-            return Err("Bundle body must not be empty".to_owned());
-        }
-
-        let cur_bundles_len = self.sbundle_pool.pending.read().len();
-        if cur_bundles_len as u32 >= self.sbundle_pool.config.max_bundles {
-            return Err("Bundle pool is full".to_owned());
-        }
-
-        // use latest block if parent is zero: genesis block
-        let cur_block = self
-            .client
-            .block_by_number_or_tag(BlockNumberOrTag::Latest)
-            .map_err(|e| format!("Failed to fetch latest block during validation: {}", e))?
-            .ok_or("Failed to fetch latest block during validation")?
-            .seal_slow()
-            .header
-            .number;
-
-        // Assuming .block is the min_block, not the exact block it needs to be included
-        if cur_block < bundle.inclusion.block {
-            return Err("current block < inclusion.block".to_owned());
-        }
-
-        // Filter on the Option to get the value out
-        if let Some(max_block) = bundle.inclusion.max_block {
-            if cur_block > max_block {
-                return Err("current block > inclusion.max_block".to_owned());
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl<Client, V, T, S> TransactionPoolBundleExt for MevSharePool<Client, V, T, S>
-where
-    V: TransactionValidator,
-    T: TransactionOrdering<Transaction = <V as TransactionValidator>::Transaction>,
-    S: BlobStore,
-    Client: BlockReaderIdExt,
-{
-    type Bundle = SendBundleRequest;
-
-    fn add_bundle(&self, bundle: SendBundleRequest) -> Result<(), String> {
-        self.validate_bundle(&bundle)?;
-        self.sbundle_pool.add_bundle(bundle)
-    }
-
-    fn get_bundles(&self) -> RwLockReadGuard<'_, Vec<SendBundleRequest>> {
-        // TODO: Re-validate bundles once per block, rather than every time they are requested
-        self.sbundle_pool.pending.write().retain(|b| self.validate_bundle(b).is_ok());
-        self.sbundle_pool.get_bundles()
-    }
-
-    fn remove_bundle(&self, hash: B256) -> Result<(), String> {
-        let len_before = self.sbundle_pool.pending.read().len();
-        self.sbundle_pool.pending.write().retain(|b| b.hash() != hash);
-        let len_after = self.sbundle_pool.pending.read().len();
-        if len_before > len_after {
-            Ok(())
-        } else {
-            Err("Bundle not found".to_owned())
+            sbundle_pool: Arc::new(SBundlePool::new(bundle_pool_config, client)),
         }
     }
 }
 
-/// Configuration for [`SBundlePoolInner`].
+/// Configuration for [`SBundlePool`].
 #[derive(Debug)]
 pub struct SBundlePoolConfig {
     /// Maximum number of bundles allowed in the pool.
@@ -138,42 +68,75 @@ impl Default for SBundlePoolConfig {
 
 /// Inner implementation for [`SBundlePool`].
 #[derive(Debug, Default)]
-struct SBundlePool {
+struct SBundlePool<Client> {
     pending: RwLock<Vec<SendBundleRequest>>,
     config: SBundlePoolConfig,
+    client: Client,
 }
 
-impl SBundlePool {
+impl<Client> SBundlePool<Client>
+where
+    Client: BlockReaderIdExt,
+{
     /// Initialize a new [`SBundlePool`].
-    pub(crate) fn new(config: SBundlePoolConfig) -> Self {
-        Self { pending: RwLock::new(Vec::new()), config }
+    pub(crate) fn new(config: SBundlePoolConfig, client: Client) -> Self {
+        Self { pending: RwLock::new(Vec::new()), config, client }
     }
 
     /// Add a new pending bundle
     /// TODO: Improve error handling
-    pub(crate) fn add_bundle(&self, bundle: SendBundleRequest) -> Result<(), String> {
-        if self.pending.read().len() as u32 >= self.config.max_bundles {
-            return Err("Pending pool is full!".to_owned());
-        }
-
-        match self.validate_bundle(&bundle) {
-            Ok(_) => {}
-            Err(e) => return Err(format!("Bundle validation failed: {}", e)),
-        }
-
+    fn add_bundle(&self, bundle: SendBundleRequest) -> Result<(), String> {
+        self.validate_bundle(&bundle)?;
         self.pending.write().push(bundle);
-
         Ok(())
     }
 
     /// Get pending bundles
-    pub(crate) fn get_bundles(&self) -> RwLockReadGuard<'_, Vec<SendBundleRequest>> {
+    fn get_bundles(&self) -> RwLockReadGuard<'_, Vec<SendBundleRequest>> {
         self.pending.read()
     }
 
-    /// Validate a bundle is eligible for inclusion
-    pub(crate) fn validate_bundle(&self, _bundle: &SendBundleRequest) -> Result<(), String> {
-        // TODO: Implement validation
+    fn remove_bundle(&self, hash: B256) -> Result<(), String> {
+        let len_before = self.pending.read().len();
+        self.pending.write().retain(|b| b.hash() != hash);
+        let len_after = self.pending.read().len();
+        if len_before > len_after {
+            Ok(())
+        } else {
+            Err("Bundle not found".to_owned())
+        }
+    }
+
+    fn validate_bundle(&self, bundle: &SendBundleRequest) -> Result<(), String> {
+        if bundle.bundle_body.is_empty() {
+            return Err("Bundle body must not be empty".to_owned());
+        }
+
+        let cur_bundles_len = self.pending.read().len();
+        if cur_bundles_len as u32 >= self.config.max_bundles {
+            return Err("Bundle pool is full".to_owned());
+        }
+
+        let cur_block = self
+            .client
+            .block_by_number_or_tag(BlockNumberOrTag::Latest)
+            .map_err(|e| format!("Failed to fetch latest block during validation: {}", e))?
+            .ok_or("Failed to fetch latest block during validation")?
+            .seal_slow()
+            .header
+            .number;
+
+        // Assuming .block is the min_block, not the exact block it needs to be included
+        if cur_block < bundle.inclusion.block {
+            return Err("current block < inclusion.block".to_owned());
+        }
+
+        if let Some(max_block) = bundle.inclusion.max_block {
+            if cur_block > max_block {
+                return Err("current block > inclusion.max_block".to_owned());
+            }
+        }
+
         Ok(())
     }
 }
@@ -181,11 +144,7 @@ impl SBundlePool {
 /// [`TransactionPool`] requires implementors to be [`Clone`].
 impl<Client, V, T: TransactionOrdering, S> Clone for MevSharePool<Client, V, T, S> {
     fn clone(&self) -> Self {
-        Self {
-            tx_pool: Arc::clone(&self.tx_pool),
-            sbundle_pool: Arc::clone(&self.sbundle_pool),
-            client: Arc::clone(&self.client),
-        }
+        Self { tx_pool: Arc::clone(&self.tx_pool), sbundle_pool: Arc::clone(&self.sbundle_pool) }
     }
 }
 
@@ -420,5 +379,28 @@ where
 
     fn cleanup_blobs(&self) {
         self.tx_pool.cleanup_blobs()
+    }
+}
+
+/// TODO: Use something like `delegate!` to automate this.
+impl<Client, V, T, S> TransactionPoolBundleExt for MevSharePool<Client, V, T, S>
+where
+    V: TransactionValidator,
+    T: TransactionOrdering<Transaction = <V as TransactionValidator>::Transaction>,
+    S: BlobStore,
+    Client: BlockReaderIdExt,
+{
+    type Bundle = SendBundleRequest;
+
+    fn add_bundle(&self, bundle: SendBundleRequest) -> Result<(), String> {
+        self.sbundle_pool.add_bundle(bundle)
+    }
+
+    fn get_bundles(&self) -> RwLockReadGuard<'_, Vec<SendBundleRequest>> {
+        self.sbundle_pool.get_bundles()
+    }
+
+    fn remove_bundle(&self, hash: B256) -> Result<(), String> {
+        self.sbundle_pool.remove_bundle(hash)
     }
 }

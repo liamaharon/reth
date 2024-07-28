@@ -1299,7 +1299,7 @@ pub trait PoolBundle: fmt::Debug + Send + Sync {
 impl PoolBundle for SendBundleRequest {
     fn hash(&self) -> B256 {
         let bytes = bincode::serialize(&self).unwrap();
-        keccak256(&bytes)
+        keccak256(bytes)
     }
 }
 
